@@ -539,7 +539,114 @@ class ResNet18Conv(ConvBase):
         """Pretty print network."""
         header = '{}'.format(str(self.__class__.__name__))
         return header + '(input_channel={}, input_coord_conv={})'.format(self._input_channel, self._input_coord_conv)
+
+class ViT_VC1(ConvBase):
+    """
+    ViT LoRA using Rein method along with VC1 pre-trained weights
+    """
+    def __init__(
+        self,
+        input_channel=3,
+        vit_model_class = 'vit_b',
+        lora_dim = 16,
+        patch_size = 16,
+        freeze = True):
+        """
+        Using pretrained observation encoder network proposed in Vision Transformers 
+        git clone https://github.com/facebookresearch/dinov2
+        pip install -r requirements.txt
+        Args:
+            input_channel (int): number of input channels for input images to the network.
+                If not equal to 3, modifies first conv layer to handle the number
+                of input channels.
+            vit_model_class (str): select one of the vit pretrained model "vit_b", "vit_l", "vit_s" or "vit_g"
+            freeze (bool): if True, use a frozen ViT pretrained model.
+        """
+        super(ViT_VC1, self).__init__()
+        import vc_models
+        from vc_models.models.vit import model_utils
+
+        assert input_channel == 3 
+        assert vit_model_class in ["vit_b", "vit_l" ,"vit_g", "vit_s"] # make sure the selected vit model do exist
+
+        # cut the last fc layer
+        self._input_channel = input_channel
+        self._vit_model_class = vit_model_class
+        self._freeze = freeze
+        self._input_coord_conv = False
+        self._pretrained = False
+        self._lora_dim = lora_dim
+        self._patch_size = patch_size
+        self._out_indices = [7, 11, 15, 23],
+       
+        try:
+            if self._vit_model_class=="vit_l":
+                self.nets,self.embd_size,self.model_transforms,self.model_info = model_utils.load_model(model_utils.VC1_LARGE_NAME)
+            if self._vit_model_class=="vit_b":
+                self.nets,self.embd_size,self.model_transforms,self.model_info = model_utils.load_model(model_utils.VC1_BASE_NAME)
+
+        except ImportError:
+            print("WARNING: could not load Vit")
+            
+        try :
+            self._rein_layers = LoRAReins(lora_dim=self._lora_dim, num_layers=len(self.nets.backbone.blocks),embed_dims = self.nets.backbone.patch_embed.proj.out_channels,patch_size=self._patch_size)
+            self._mlp_lora_head = MLPhead(in_dim=3*self.nets.backbone.patch_embed.proj.out_channels, out_dim = 5*self.nets.backbone.patch_embed.proj.out_channels)
+        except ImportError:
+            print("WARNING: could not load rein layer")
+
         
+        if self._freeze:
+            for param in self.nets.parameters():
+                param.requires_grad = False
+            self.nets.eval()
+
+    def forward(self, inputs):
+        x = self.model_transforms(inputs)
+        x = self.nets.backbone.patch_embed(x)
+        for idx, blk in enumerate(self.nets.backbone.blocks):
+            x = blk(x)
+            x = self._rein_layers.forward(
+                x,
+                idx,
+                batch_first=True,
+                has_cls_token=True,
+            )
+
+        q_avg = x.mean(dim=1).unsqueeze(1)
+        q_max = torch.max(x,1)[0].unsqueeze(1)
+        q_N = x[:,x.shape[1]-1,:].unsqueeze(1)
+
+        _q = torch.cat((q_avg, q_max, q_N), dim=1)
+
+        x = self.nets.backbone.norm(_q)
+        x = x.flatten(-2,-1)
+        x = self._mlp_lora_head(x)
+        x = self.nets.linear_head(x)
+        return x    
+
+    def output_shape(self, input_shape):
+        """
+        Function to compute output shape from inputs to this module.
+        Args:
+            input_shape (iterable of int): shape of input. Does not include batch dimension.
+                Some modules may not need this argument, if their output does not depend
+                on the size of the input, or if they assume fixed size input.
+        Returns:
+            out_shape ([int]): list of integers corresponding to output shape
+        """
+        assert(len(input_shape) == 3)
+
+        out_dim = 1000
+
+        return [out_dim, 1, 1]
+
+    def __repr__(self):
+        """Pretty print network."""
+        print("**Number of learnable params:",sum(p.numel() for p in self.nets.parameters() if p.requires_grad)," Freeze:",self._freeze)
+        print("**Number of params:",sum(p.numel() for p in self.nets.parameters()))
+
+        header = '{}'.format(str(self.__class__.__name__))
+        return header + '(input_channel={}, input_coord_conv={}, pretrained={}, freeze={})'.format(self._input_channel, self._input_coord_conv, self._pretrained, self._freeze)       
 class ViT_Rein(ConvBase):
     """
     ViT LoRA using Rein method
