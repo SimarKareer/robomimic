@@ -158,6 +158,12 @@ def lr_scheduler_from_optim_params(net_optim_params, net, optimizer):
                 milestones=epoch_schedule,
                 gamma=net_optim_params["learning_rate"]["decay_factor"],
             )
+        elif lr_scheduler_type == "cosine":
+            # breakpoint()
+            return optim.lr_scheduler.CosineAnnealingLR(
+                optimizer=optimizer,
+                T_max=2000,
+            )
         else:
             raise ValueError("Invalid LR scheduler type: {}".format(lr_scheduler_type))
 
@@ -201,7 +207,6 @@ def backprop_for_loss(net, optim, loss, max_grad_norm=None, retain_graph=False):
 
     # step
     optim.step()
-
     return grad_norms
 
 
