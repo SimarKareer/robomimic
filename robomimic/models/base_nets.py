@@ -907,16 +907,23 @@ class R3MConv(ConvBase):
         self._freeze = freeze
         self._input_coord_conv = False
         self._pretrained = True
+        self._preprocess = False
 
         preprocess = nn.Sequential(
             transforms.Resize(256),
             transforms.CenterCrop(224),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         )
-        self.nets = Sequential(
-            *([preprocess] + list(net.module.convnet.children())),
-            has_output_shape=False,
-        )
+        if self._preprocess:
+            self.nets = Sequential(
+                *([preprocess] + list(net.module.convnet.children())),
+                has_output_shape=False,
+            )
+        else:
+            self.nets = Sequential(
+                *(list(net.module.convnet.children())[:-2]),
+                has_output_shape=False,
+            )
         if freeze:
             self.nets.freeze()
 
@@ -946,7 +953,7 @@ class R3MConv(ConvBase):
         else:
             out_dim = 512
 
-        return [out_dim, 1, 1]
+        return [out_dim, 15, 20]
 
     def __repr__(self):
         """Pretty print network."""
@@ -960,7 +967,6 @@ class R3MConv(ConvBase):
                 self._freeze,
             )
         )
-
 
 class MVPConv(ConvBase):
     """
